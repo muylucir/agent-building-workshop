@@ -1,161 +1,132 @@
 ---
 name: strands-sdk-guide
 description: |
-  Strands Agents SDK 개발 종합 가이드. AI 에이전트 개발을 위한 베스트 프랙티스, 패턴, 코드 예제 제공.
-  다음 상황에서 사용:
-  (1) Strands SDK로 새 에이전트 생성
-  (2) 커스텀 도구(Tool) 개발
-  (3) MCP 서버 연동
-  (4) 모델 프로바이더 설정 (Bedrock, OpenAI 등)
-  (5) 멀티 에이전트 시스템 구축 (Graph, Swarm, Workflow)
-  (6) Hooks, 스트리밍, 대화 관리 구현
-  (7) Structured Output 사용
-  (8) 에이전트 배포 및 운영
+  TRIGGER on keywords: Strands, strands-agents, strands SDK, `from strands import`, or any of these class/function names: MCPClient, HookProvider, BeforeToolCallEvent, FileSessionManager, S3SessionManager, SlidingWindowConversationManager, SummarizingConversationManager, structured_output_model, handoff_to_agent, BedrockModel, stream_async.
+  Also use when building Python AI agents with tools and model providers (Bedrock, OpenAI, Anthropic) without specifying another framework.
+  Covers: agent creation, @tool decorator, MCP server integration, multi-agent (Swarm/Graph/Workflow), hooks, streaming, conversation management, session persistence, structured output with Pydantic.
+  DO NOT trigger for: LangChain, LangGraph, CrewAI, OpenAI Assistants, raw boto3, terraform, SageMaker, or AgentCore deploy.
 ---
 
 # Strands Agents SDK 개발 가이드
 
-Strands Agents SDK는 AI 에이전트를 빠르게 구축, 관리, 배포할 수 있는 프레임워크다.
+Strands Agents SDK는 AI 에이전트를 빠르게 구축할 수 있는 오픈소스 프레임워크다. Python과 TypeScript를 지원한다.
 
-## 핵심 개념
+## Agent Loop (핵심 동작 원리)
 
-### Agent Loop
-에이전트의 핵심 동작 원리:
-1. 모델 호출 → 2. 도구 선택 여부 확인 → 3. 도구 실행 → 4. 결과로 다시 모델 호출 → 반복
+모델 호출 → 도구 선택 여부 확인 → 도구 실행 → 결과로 다시 모델 호출 → 반복
 
 ```python
 from strands import Agent
-
-agent = Agent()
-response = agent("What is 2 + 2?")
-```
-
-### 기본 구성요소
-- **Agent**: 핵심 실행 단위
-- **Model Provider**: LLM 연결 (Bedrock, OpenAI, Anthropic 등)
-- **Tools**: 에이전트 기능 확장
-- **Hooks**: 라이프사이클 이벤트 처리
-- **Conversation Manager**: 컨텍스트 윈도우 관리
-
-## 빠른 시작
-
-### 설치
-```bash
-# Python
-pip install strands-agents
-pip install 'strands-agents[bedrock]'  # Bedrock 사용 시
-pip install 'strands-agents[all]'      # 모든 프로바이더
-
-# TypeScript
-npm install @strands-agents/sdk
-```
-
-### 첫 에이전트 생성
-
-**Python:**
-```python
-from strands import Agent
-
-agent = Agent(
-    system_prompt="You are a helpful assistant.",
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0"
-)
+agent = Agent(system_prompt="You are a helpful assistant.")
 response = agent("Hello!")
-print(response)
 ```
 
-**TypeScript:**
-```typescript
-import { Agent } from '@strands-agents/sdk'
+## 어떤 문서를 읽어야 하나?
 
-const agent = new Agent({
-  systemPrompt: 'You are a helpful assistant.'
-})
-const response = await agent.invoke('Hello!')
-```
+사용자의 요청에 따라 아래 참조 문서 중 필요한 것만 읽는다. 여러 주제에 걸친 요청이면 관련 문서를 모두 읽는다.
 
-## 상세 가이드
+| 사용자 요청 | 읽을 문서 |
+|------------|----------|
+| 설치, 환경설정, 첫 에이전트, AWS 자격증명 | [quickstart.md](references/quickstart.md) |
+| 커스텀 도구 생성, MCP 연동, 도구 스트리밍 | [tools.md](references/tools.md) |
+| 모델 변경, Bedrock/OpenAI/Anthropic 설정, 캐싱 | [model-providers.md](references/model-providers.md) |
+| 멀티 에이전트, Graph/Swarm/Workflow 패턴 | [multi-agent.md](references/multi-agent.md) |
+| Hooks, 스트리밍 처리, 콜백 핸들러 | [hooks-streaming.md](references/hooks-streaming.md) |
+| 대화 관리, 세션, Structured Output, Observability | [session-output.md](references/session-output.md) |
 
-각 주제별 상세 문서:
+## 자주 쓰는 레시피
 
-- **[빠른 시작 가이드](references/quickstart.md)**: 설치, 환경 설정, 첫 에이전트
-- **[도구(Tools) 개발](references/tools.md)**: 커스텀 도구, MCP 연동, 도구 스트리밍
-- **[모델 프로바이더](references/model-providers.md)**: Bedrock, OpenAI, Anthropic 설정
-- **[멀티 에이전트 패턴](references/multi-agent.md)**: Graph, Swarm, Workflow 패턴
-- **[고급 기능](references/advanced.md)**: Hooks, 스트리밍, 대화 관리, Structured Output
+### 레시피 1: 도구가 있는 기본 에이전트
 
-## 베스트 프랙티스 요약
-
-### 도구 설계
 ```python
-from strands import tool
+from strands import Agent, tool
 
 @tool
-def search_database(query: str, limit: int = 10) -> str:
+def search_db(query: str) -> str:
     """Search the database for records.
 
     Args:
         query: Search query string
-        limit: Maximum results to return
     """
-    # 명확한 docstring으로 LLM이 도구 사용법을 이해하도록 함
     return f"Found results for: {query}"
+
+agent = Agent(
+    system_prompt="You are a helpful assistant with database access.",
+    tools=[search_db]
+)
+response = agent("Find users named Alice")
 ```
 
-### 에러 처리
+### 레시피 2: MCP 서버 연동 에이전트
+
 ```python
-@tool
-def risky_operation(data: str) -> dict:
-    """Perform operation that might fail."""
-    try:
-        result = process(data)
-        return {"status": "success", "content": [{"text": result}]}
-    except Exception as e:
-        return {"status": "error", "content": [{"text": f"Error: {e}"}]}
+from mcp import stdio_client, StdioServerParameters
+from strands import Agent
+from strands.tools.mcp import MCPClient
+
+mcp_client = MCPClient(lambda: stdio_client(
+    StdioServerParameters(command="uvx", args=["awslabs.aws-documentation-mcp-server@latest"])
+))
+
+agent = Agent(tools=[mcp_client])
+response = agent("What is AWS Lambda?")
 ```
 
-### 비동기 실행
-```python
-import asyncio
-from strands import Agent, tool
+### 레시피 3: 멀티 에이전트 협업 (Swarm)
 
-@tool
-async def async_api_call(endpoint: str) -> str:
-    """Call external API asynchronously."""
-    await asyncio.sleep(1)
-    return f"Response from {endpoint}"
-
-async def main():
-    agent = Agent(tools=[async_api_call])
-    result = await agent.invoke_async("Call the API")
-```
-
-### 컨텍스트 관리
 ```python
 from strands import Agent
-from strands.agent.conversation_manager import SlidingWindowConversationManager
+from strands.multiagent import Swarm
+from strands.tools.swarm import handoff_to_agent
 
-# 긴 대화를 위한 슬라이딩 윈도우 설정
-agent = Agent(
-    conversation_manager=SlidingWindowConversationManager(
-        window_size=20,
-        should_truncate_results=True
-    )
-)
+researcher = Agent(name="researcher", system_prompt="Research topics. Hand off to writer when done.", tools=[handoff_to_agent])
+writer = Agent(name="writer", system_prompt="Write content based on research.", tools=[handoff_to_agent])
+
+swarm = Swarm(agents=[researcher, writer], initial_agent="researcher")
+result = swarm("Write a blog post about AI agents")
+```
+
+### 레시피 4: Structured Output
+
+```python
+from pydantic import BaseModel, Field
+from strands import Agent
+
+class PersonInfo(BaseModel):
+    name: str = Field(description="Name")
+    age: int = Field(description="Age")
+
+agent = Agent()
+result = agent("John is a 30-year-old engineer", structured_output_model=PersonInfo)
+print(result.structured_output.name)  # John
+```
+
+### 레시피 5: 비동기 스트리밍 에이전트
+
+```python
+import asyncio
+from strands import Agent
+
+async def main():
+    agent = Agent()
+    async for event in agent.stream_async("Tell me a story"):
+        if "data" in event:
+            print(event["data"], end="", flush=True)
+
+asyncio.run(main())
 ```
 
 ## 일반적인 실수 방지
 
-1. **도구 설명 부족**: LLM이 도구를 올바르게 선택하도록 명확한 docstring 작성
-2. **컨텍스트 오버플로우**: 긴 대화에는 SlidingWindow 또는 Summarizing 매니저 사용
-3. **MCP 컨텍스트 누락**: MCP 클라이언트는 `with` 블록 내에서 사용하거나 Agent에 직접 전달
-4. **비동기 혼용**: 동기/비동기 패턴을 일관되게 사용
-5. **도구 반환값 형식**: 복잡한 결과는 ToolResult 구조 사용
+1. **도구 설명 부족** — LLM이 도구를 올바르게 선택하려면 명확한 docstring이 필요하다
+2. **컨텍스트 오버플로우** — 긴 대화에는 SlidingWindow 또는 Summarizing 매니저를 사용한다
+3. **MCP 컨텍스트 누락** — MCPClient는 Agent에 직접 전달하거나 `with` 블록 내에서 사용한다
+4. **Cross-Region 에러** — Bedrock 모델 ID에 리전 접두사를 붙인다 (`us.anthropic.claude-sonnet-4-20250514-v1:0`)
+5. **비동기 혼용** — 동기/비동기 패턴을 일관되게 사용한다. 비동기 도구는 `invoke_async()`로 호출한다
 
-## 디버깅 팁
+## 디버깅
 
 ```python
-# 콜백 핸들러로 이벤트 모니터링
 def debug_handler(**kwargs):
     if "data" in kwargs:
         print(f"[TEXT] {kwargs['data']}", end="")
@@ -166,9 +137,3 @@ def debug_handler(**kwargs):
 
 agent = Agent(callback_handler=debug_handler)
 ```
-
-## 참고 자료
-
-- [공식 문서](https://strandsagents.com)
-- [GitHub](https://github.com/strands-agents)
-- [API Reference](https://strandsagents.com/latest/documentation/docs/api-reference/)
