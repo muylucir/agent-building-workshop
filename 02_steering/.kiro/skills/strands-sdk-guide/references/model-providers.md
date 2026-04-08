@@ -36,11 +36,11 @@ from strands.models import BedrockModel
 agent = Agent()
 
 # 모델 ID 직접 지정
-agent = Agent(model="us.anthropic.claude-sonnet-4-20250514-v1:0")
+agent = Agent(model="global.anthropic.claude-sonnet-4-6")
 
 # BedrockModel 인스턴스
 bedrock = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_id="global.anthropic.claude-sonnet-4-6",
     temperature=0.3,
     max_tokens=4096
 )
@@ -54,7 +54,7 @@ import { Agent } from '@strands-agents/sdk'
 import { BedrockModel } from '@strands-agents/sdk/bedrock'
 
 const bedrock = new BedrockModel({
-  modelId: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+  modelId: 'global.anthropic.claude-sonnet-4-6',
   temperature: 0.3,
   maxTokens: 4096
 })
@@ -75,7 +75,7 @@ boto_config = BotocoreConfig(
 )
 
 bedrock = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_id="global.anthropic.claude-sonnet-4-6",
     region_name="us-east-1",
     temperature=0.3,
     top_p=0.8,
@@ -88,7 +88,7 @@ bedrock = BedrockModel(
 
 ```python
 bedrock = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_id="global.anthropic.claude-sonnet-4-6",
     guardrail_id="your-guardrail-id",
     guardrail_version="DRAFT",
     guardrail_trace="enabled",
@@ -117,7 +117,7 @@ agent = Agent(system_prompt=system_content)
 from strands.models import BedrockModel
 
 bedrock = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_id="global.anthropic.claude-sonnet-4-6",
     cache_tools="default"
 )
 agent = Agent(model=bedrock, tools=[tool1, tool2])
@@ -163,7 +163,7 @@ response = agent([
 
 ```python
 bedrock = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_id="global.anthropic.claude-sonnet-4-6",
     additional_request_fields={
         "thinking": {
             "type": "enabled",
@@ -182,194 +182,6 @@ bedrock = BedrockModel(model_id="...", temperature=0.7)
 bedrock.update_config(temperature=0.3, top_p=0.8)
 ```
 
-## OpenAI
-
-GPT 모델 지원.
-
-### Python
-
-```python
-from strands import Agent
-from strands.models.openai import OpenAIModel
-
-openai_model = OpenAIModel(
-    client_args={"api_key": "your-api-key"},
-    model_id="gpt-4o"
-)
-
-agent = Agent(model=openai_model)
-```
-
-### TypeScript
-
-```typescript
-import { Agent } from '@strands-agents/sdk'
-import { OpenAIModel } from '@strands-agents/sdk/openai'
-
-const openai = new OpenAIModel({
-  apiKey: process.env.OPENAI_API_KEY,
-  modelId: 'gpt-4o'
-})
-
-const agent = new Agent({ model: openai })
-```
-
-## Anthropic
-
-Claude 모델 직접 API 연결 (Python만 지원).
-
-```python
-from strands import Agent
-from strands.models import AnthropicModel
-
-anthropic_model = AnthropicModel(
-    model_id="claude-sonnet-4-20250514",
-    max_tokens=4096,
-    params={"temperature": 0.3}
-)
-
-agent = Agent(model=anthropic_model)
-```
-
-## 기타 프로바이더
-
-### Ollama (로컬 모델)
-
-```python
-from strands.models.ollama import OllamaModel
-
-ollama = OllamaModel(
-    host="http://localhost:11434",
-    model_id="llama3.2"
-)
-agent = Agent(model=ollama)
-```
-
-### LiteLLM (통합 인터페이스)
-
-```python
-from strands.models.litellm import LiteLLMModel
-
-litellm = LiteLLMModel(
-    model_id="gpt-4o",
-    params={"api_key": "your-key"}
-)
-agent = Agent(model=litellm)
-```
-
-### Gemini
-
-```python
-from strands.models.gemini import GeminiModel
-
-gemini = GeminiModel(
-    model_id="gemini-pro",
-    client_args={"api_key": "your-key"}
-)
-agent = Agent(model=gemini)
-```
-
-### MistralAI
-
-```python
-from strands.models.mistral import MistralModel
-
-mistral = MistralModel(
-    model_id="mistral-large-latest",
-    client_args={"api_key": "your-key"}
-)
-agent = Agent(model=mistral)
-```
-
-## 커스텀 프로바이더
-
-자체 모델 프로바이더 구현:
-
-### Python
-
-```python
-from strands.models import Model
-from strands.types.models import ModelConfig
-from typing import Any, Generator
-
-class CustomModel(Model):
-    def __init__(self, api_key: str, model_id: str):
-        self.api_key = api_key
-        self.model_id = model_id
-
-    def get_config(self) -> ModelConfig:
-        return ModelConfig(
-            model_id=self.model_id,
-            max_tokens=4096,
-            temperature=0.7
-        )
-
-    def update_config(self, **kwargs):
-        # 설정 업데이트 로직
-        pass
-
-    def format_request(self, messages: list, tools: list, system_prompt: str) -> dict:
-        # 요청 포맷팅
-        return {
-            "messages": messages,
-            "tools": tools,
-            "system": system_prompt
-        }
-
-    def stream(self, request: dict) -> Generator[dict, None, None]:
-        # 스트리밍 응답 생성
-        response = self._call_api(request)
-        for chunk in response:
-            yield self._format_chunk(chunk)
-
-    def _call_api(self, request: dict) -> Any:
-        # API 호출 구현
-        pass
-
-    def _format_chunk(self, chunk: Any) -> dict:
-        # 청크 포맷팅
-        pass
-
-# 사용
-custom = CustomModel(api_key="...", model_id="custom-model")
-agent = Agent(model=custom)
-```
-
-### TypeScript
-
-```typescript
-import { Model, ModelConfig, Message, ToolSpec } from '@strands-agents/sdk'
-
-class CustomModel implements Model {
-  private apiKey: string
-  private modelId: string
-
-  constructor(apiKey: string, modelId: string) {
-    this.apiKey = apiKey
-    this.modelId = modelId
-  }
-
-  getConfig(): ModelConfig {
-    return {
-      modelId: this.modelId,
-      maxTokens: 4096,
-      temperature: 0.7
-    }
-  }
-
-  updateConfig(config: Partial<ModelConfig>): void {
-    // 설정 업데이트
-  }
-
-  formatRequest(messages: Message[], tools: ToolSpec[], systemPrompt: string) {
-    return { messages, tools, system: systemPrompt }
-  }
-
-  async *stream(request: any): AsyncGenerator<any> {
-    // 스트리밍 구현
-  }
-}
-```
 
 ## 모델 전환
 
@@ -381,7 +193,7 @@ from strands.models import BedrockModel
 from strands.models.openai import OpenAIModel
 
 # Bedrock 사용
-bedrock = BedrockModel(model_id="us.anthropic.claude-sonnet-4-20250514-v1:0")
+bedrock = BedrockModel(model_id="global.anthropic.claude-sonnet-4-6")
 agent = Agent(model=bedrock)
 response1 = agent("Hello from Bedrock")
 
@@ -398,7 +210,7 @@ response2 = agent("Hello from OpenAI")
 ```python
 # 스트리밍 (기본값)
 streaming_model = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_id="global.anthropic.claude-sonnet-4-6",
     streaming=True
 )
 
@@ -418,7 +230,7 @@ non_streaming_model = BedrockModel(
 model_id = "anthropic.claude-sonnet-4-20250514-v1:0"
 
 # 올바름 - 리전 접두사 추가
-model_id = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+model_id = "global.anthropic.claude-sonnet-4-6"
 ```
 
 ### 리전 해결 우선순위

@@ -85,3 +85,35 @@ def mock_some_retriever(query: str, top_k: int = 10) -> list:
 2. 명세서 Tool Definitions의 반환 타입 구조
 3. 명세서 State Management의 필드 설명
 4. 도메인 지식 기반 합리적 생성
+
+## 실행 방법
+
+### 환경 설정
+
+```bash
+# uv 설치 (미설치 시)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 프로젝트 디렉토리에서 의존성 설치
+cd <project-root>
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+### AWS 인증
+
+Instance Profile을 사용한다. 별도의 AWS 자격증명 파일이나 환경변수 설정이 필요 없다.
+
+- EC2 인스턴스에 Bedrock 접근 권한이 포함된 IAM Role이 연결되어 있어야 함
+- 필요 권한: `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`
+
+### 실행
+
+```bash
+# 기본 예시 입력으로 실행
+python main.py
+
+# JSON 파일 입력으로 실행
+python main.py --input input.json
+```
