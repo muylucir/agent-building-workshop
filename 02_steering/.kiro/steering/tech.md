@@ -35,7 +35,7 @@ SDK 사용법의 상세 가이드는 별도 skill에 정의되어 있다:
 from strands.models import BedrockModel
 
 model = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",  # 리전 접두사 필수
+    model_id="global.anthropic.claude-sonnet-4-6",  # 리전 접두사 필수
     max_tokens=8192,
     temperature=0.0,
 )
