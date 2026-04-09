@@ -241,6 +241,7 @@ cp .env.example .env
 # .env에 AWS_REGION, AWS_PROFILE 또는 AWS_ACCESS_KEY_ID 등 설정
 
 # Python 3.12 가상환경 생성 및 의존성 설치
+curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -e .
