@@ -77,70 +77,7 @@ def get_user_prompt(input_data: dict) -> str:
 
 명세서의 Compact Signature를 Strands `@tool` 데코레이터 함수로 변환하되, 실제 API 대신 **현실적인 mock**으로 구현한다.
 
-### 변환 규칙
-
-명세서 형식:
-```
-- Purpose: 관세율표 DB를 RAG로 검색하여 후보 HS코드 목록을 반환
-- Signature: tariff_schedule_retriever(item_description: str, top_k?: int = 10) -> list[{hs_code: str, description: str}]
-- When to use: HS Code Classifier Agent가 분류 후보 코드를 탐색할 때
-```
-
-변환 결과 — 도구 함수 (tools/):
-```python
-from strands import tool
-from mocks.<domain>_mock import mock_<tool_name>
-
-@tool
-def <tool_name>(query: str, top_k: int = 10) -> list:
-    """<Purpose 그대로 사용>
-
-    Args:
-        query: <Signature 파라미터 설명>
-        top_k: 반환할 최대 후보 수
-    """
-    return mock_<tool_name>(query, top_k)
-```
-
-변환 결과 — mock 구현 (mocks/):
-```python
-# mocks/<domain>_mock.py
-import json
-from pathlib import Path
-
-_DATA_DIR = Path(__file__).parent / "data"
-_RECORDS = json.loads((_DATA_DIR / "<domain>_records.json").read_text())
-
-def mock_<tool_name>(query: str, top_k: int = 10) -> list:
-    """키워드 매칭 기반 mock — 입력에 따라 다른 결과 반환"""
-    query_lower = query.lower()
-    results = []
-    for entry in _RECORDS:
-        score = sum(1 for kw in entry["keywords"] if kw in query_lower)
-        if score > 0:
-            results.append({**entry, "similarity_score": round(score / len(entry["keywords"]), 2)})
-    return sorted(results, key=lambda x: x["similarity_score"], reverse=True)[:top_k]
-```
-
-### mock 데이터 파일 (mocks/data/):
-```json
-// mocks/data/<domain>_records.json — 명세서 <examples> 블록에서 추출
-[
-  {
-    "id": "...",
-    "description": "...",
-    "keywords": ["keyword1", "keyword2"]
-  }
-]
-```
-
-### mock 구현 필수 규칙
-
-1. **도구 함수(`tools/`)와 mock 구현(`mocks/`)을 분리** — 나중에 실제 API로 교체할 때 도구 함수의 import만 변경
-2. **명세서 `<examples>` 블록의 입출력 데이터를 mock 데이터의 기준으로 사용** — 명세서 예시가 mock을 통과하면 에이전트가 정상 동작하는 것
-3. **명세서 `<output_format>`의 JSON 구조를 정확히 준수** — mock 반환값이 명세서 출력 스키마와 일치해야 함
-4. **입력에 따라 결과가 달라지도록 구현** — 키워드 매칭, 조건 분기, 룩업 테이블 등 활용
-5. **에러 시뮬레이션 지원** — 특정 입력값(예: `"__TIMEOUT__"`)으로 타임아웃/오류를 트리거할 수 있도록 구현
+→ mock 구현의 상세 규칙(변환 패턴, 데이터 파일 구조, 필수 규칙)은 **`mock.md`** 참조
 
 ## 5. State Management → 공유 상태
 
