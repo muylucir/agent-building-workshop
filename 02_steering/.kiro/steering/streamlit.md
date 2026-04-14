@@ -135,6 +135,64 @@ except Exception as e:
         st.code(traceback.format_exc())
 ```
 
+## 에이전트 동작 가시화 (Observability)
+
+비개발자가 "AI가 지금 무엇을 하고 있는지"를 실시간으로 이해할 수 있어야 한다. 단순히 "실행 중..."만 보여주는 것은 금지.
+
+### 필수 표시 항목
+
+| 항목 | 표시 방법 | 설명 |
+|------|----------|------|
+| 현재 활성 에이전트 | `st.status()` 라벨 | 어떤 에이전트가 지금 동작 중인지 이름과 역할 표시 |
+| 도구 호출 | `st.expander()` + 입출력 JSON | 어떤 도구를 왜 호출했고, 무엇을 받았는지 |
+| 에이전트 판단 | `st.info()` | 에이전트가 내린 핵심 결정 (분류 결과, 라우팅 선택 등) |
+| 단계 간 데이터 흐름 | `st.expander()` | 이전 에이전트 출력 → 다음 에이전트 입력으로 전달된 데이터 |
+| 최종 결과 | `st.success()` + 구조화 출력 | 파이프라인 최종 산출물 |
+
+### Strands Hooks 기반 실시간 로깅
+
+Strands SDK의 `HookProvider`를 사용하여 에이전트 내부 이벤트를 Streamlit UI에 실시간으로 표시한다. `app.py`에 `StreamlitHook` 클래스를 정의하고, 에이전트 생성 시 주입한다.
+
+캡처해야 할 이벤트:
+
+| Strands 이벤트 | UI 표시 |
+|---------------|---------|
+| `BeforeInvocationEvent` | `st.status()` — "🤖 {agent_name} 시작" |
+| `AfterInvocationEvent` | `st.status()` — "✅ {agent_name} 완료" |
+| `BeforeToolCallEvent` | `st.expander("🔧 도구: {tool_name}")` — 입력 파라미터 표시 |
+| `AfterToolCallEvent` | 같은 expander에 반환값 추가 |
+
+구현 패턴은 streamlit-patterns skill의 **Agent Observability** 레시피를 참조한다.
+
+### 에이전트별 구역 분리
+
+멀티 에이전트 파이프라인에서는 각 에이전트의 동작을 시각적으로 구분한다:
+
+```python
+for agent_name, agent_fn in pipeline_stages:
+    with st.container(border=True):
+        st.subheader(f"🤖 {agent_name}")
+        with st.status(f"{agent_name} 실행 중...", expanded=True) as status:
+            # hook이 이 컨테이너 안에 도구 호출 로그를 추가
+            result = agent_fn(current_input)
+            status.update(label=f"✅ {agent_name} 완료", state="complete")
+        with st.expander(f"📤 {agent_name} 출력 데이터"):
+            st.json(result)
+```
+
+### 도구 호출 표시 형식
+
+도구 호출은 입력과 출력을 명확히 구분하여 표시한다:
+
+```python
+with st.expander(f"🔧 도구: {tool_name}", expanded=False):
+    st.caption("입력")
+    st.json(tool_input)
+    st.caption("출력")
+    st.json(tool_output)
+    st.caption(f"⏱️ {elapsed_ms}ms")
+```
+
 ## 필수 규칙
 
 1. `app.py`는 프로젝트 루트에 생성한다

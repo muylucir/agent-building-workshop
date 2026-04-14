@@ -216,18 +216,9 @@ Mock 구현 규칙:
 
 ---
 
-## 7단계: 검증 기준
+## 7단계: 검증 (CLI 실행 확인)
 
-구현 완료 후 아래 기준을 모두 충족하는지 확인하세요:
-
-| 검증 항목 | 확인 방법 |
-|-----------|-----------|
-| 명세서의 시스템 프롬프트가 수정 없이 저장되었는가 | 명세서 원본과 `src/prompts/` 파일 diff 비교 |
-| 명세서의 모든 도구가 동일한 시그니처로 구현되었는가 | 각 도구 파라미터명·타입 비교 |
-| 명세서의 모든 에이전트가 구현되었는가 | `src/agents/` 디렉토리 파일 목록 확인 |
-| `USE_MOCK=true`로 E2E 파이프라인이 오류 없이 완주하는가 | `tests/test_e2e/test_normal_flow.py` 실행 |
-| Edge Case 입력에 대해 명세서 기술대로 처리되는가 | `tests/test_e2e/test_edge_cases.py` 실행 |
-| 명세서에 정의된 모든 기능이 빠짐없이 구현되었는가 | 명세서 전체 섹션과 코드 대조 확인 |
+구현 완료 후 `USE_MOCK=true python -m src.main`으로 E2E 파이프라인이 오류 없이 완주하는지 확인하세요.
 
 ---
 
@@ -246,12 +237,145 @@ uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -e .
 
-# Mock 모드로 실행
+# Mock 모드로 CLI 실행
 USE_MOCK=true python -m src.main
+
+# Streamlit UI로 실행
+USE_MOCK=true streamlit run app.py
 
 # 테스트
 pytest tests/ -v
 ```
+
+---
+
+## 9단계: Streamlit UI 생성
+
+비개발자가 브라우저에서 에이전트를 실행·확인할 수 있도록 Streamlit UI를 생성하세요.
+기존 코드(src/ 하위)를 **수정하지 않고**, `app.py`를 프로젝트 루트에 추가합니다.
+
+### 레이아웃 (3영역)
+
+| 영역 | 구현 | 내용 |
+|------|------|------|
+| 사이드바 | `st.sidebar` | 입력 폼 (스키마 기반 자동 생성) + ▶️ 실행 버튼 + 🔄 초기화 버튼 |
+| 메인 상단 | `st.status()` | 파이프라인 단계별 진행 상황 실시간 표시 |
+| 메인 하단 | `st.container` | 최종 결과 (JSON/마크다운/테이블) |
+
+### 입력 폼 규칙
+
+`src/main.py`의 기본 입력 데이터를 분석하여 폼을 생성하세요:
+- `str` → `st.text_input()` 또는 `st.text_area()` (길이에 따라)
+- `int` / `float` → `st.number_input()`
+- `bool` → `st.checkbox()`
+- `enum` / 선택지 → `st.selectbox()`
+- 복합 객체 → `st.text_area()` + JSON 파싱 (기본값으로 main.py 예시 입력 미리 채움)
+
+### 실행 흐름 표시
+
+```python
+with st.status("🔄 파이프라인 실행 중...", expanded=True) as status:
+    st.write("1단계: ...")
+    # 각 에이전트/스테이지 실행
+    st.write("2단계: ...")
+    status.update(label="✅ 완료", state="complete")
+```
+
+- 에이전트 추론 과정 → `st.expander("🤖 에이전트 추론 과정")`
+- 도구 호출 로그 → `st.expander(f"🔧 도구 호출: {tool_name}")` + `st.json()`
+- 에러 발생 시 → `st.error()` + `st.expander("상세 오류 정보")` + `st.code(traceback)`
+
+### 세션 상태 관리
+
+```python
+if "pipeline_result" not in st.session_state:
+    st.session_state.pipeline_result = None
+    st.session_state.is_running = False
+
+# 초기화 버튼
+if st.sidebar.button("🔄 초기화"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+```
+
+### 필수 규칙
+
+1. `app.py`는 프로젝트 루트에 생성 — `src/` 내부의 모듈을 import하여 호출
+2. 기존 코드(src/, tests/)를 절대 수정하지 않음
+3. `st.set_page_config(page_title="에이전트명", layout="wide")`를 파일 최상단에 호출
+4. 모든 UI 텍스트는 한국어
+5. `is_running` 플래그로 중복 실행 방지
+6. `pyproject.toml`에 `streamlit>=1.45` 의존성 추가
+
+### 에이전트 동작 가시화 (필수)
+
+비개발자가 "AI가 지금 무엇을 하고 있는지"를 실시간으로 이해할 수 있어야 한다. 단순히 "실행 중..."만 보여주는 것은 금지.
+
+Strands SDK의 `HookProvider`를 사용하여 에이전트 내부 이벤트를 UI에 표시하는 `StreamlitHook` 클래스를 `app.py`에 구현하세요:
+
+```python
+from strands.hooks import (
+    HookProvider, HookRegistry,
+    BeforeInvocationEvent, AfterInvocationEvent,
+    BeforeToolCallEvent, AfterToolCallEvent,
+)
+
+class StreamlitHook(HookProvider):
+    def register_hooks(self, registry: HookRegistry) -> None:
+        registry.add_callback(BeforeInvocationEvent, self.on_agent_start)
+        registry.add_callback(AfterInvocationEvent, self.on_agent_end)
+        registry.add_callback(BeforeToolCallEvent, self.on_tool_start)
+        registry.add_callback(AfterToolCallEvent, self.on_tool_end)
+    # 각 콜백에서 st.session_state.agent_logs에 이벤트를 기록
+```
+
+필수 표시 항목:
+
+| 항목 | 표시 방법 |
+|------|----------|
+| 현재 활성 에이전트 | `st.status()` 라벨에 에이전트 이름과 역할 |
+| 도구 호출 | `st.expander("🔧 도구: {name}")` 안에 입력 JSON, 출력 JSON, 소요 시간 |
+| 에이전트 판단 | `st.info()` — 핵심 결정 (분류 결과, 라우팅 선택 등) |
+| 단계 간 데이터 흐름 | `st.expander()` — 이전 에이전트 출력 → 다음 에이전트 입력 |
+| 최종 결과 | `st.success()` + 구조화된 JSON/마크다운/테이블 |
+
+멀티 에이전트인 경우 각 에이전트를 `st.container(border=True)` + `st.subheader("🤖 {agent_name}")`로 시각적으로 구분하세요.
+
+Hook 주입은 기존 에이전트 코드를 수정하지 않고 app.py에서 수행:
+```python
+hook = StreamlitHook()
+agent.agent.hooks.add_hook_provider(hook)  # 에이전트 인스턴스의 hooks에 추가
+```
+
+### 구현할 파일
+
+- `app.py` — Streamlit 진입점
+- `pyproject.toml` — streamlit 의존성 추가
+
+### 실행 방법 (README에 추가)
+
+```bash
+# Streamlit UI로 실행
+streamlit run app.py
+```
+
+---
+
+## 10단계: 최종 검증 기준
+
+구현 완료 후 아래 기준을 **모두** 충족하는지 확인하세요:
+
+| 검증 항목 | 확인 방법 |
+|-----------|-----------|
+| 명세서의 시스템 프롬프트가 수정 없이 저장되었는가 | 명세서 원본과 `src/prompts/` 파일 diff 비교 |
+| 명세서의 모든 도구가 동일한 시그니처로 구현되었는가 | 각 도구 파라미터명·타입 비교 |
+| 명세서의 모든 에이전트가 구현되었는가 | `src/agents/` 디렉토리 파일 목록 확인 |
+| `USE_MOCK=true`로 E2E 파이프라인이 오류 없이 완주하는가 | `tests/test_e2e/test_normal_flow.py` 실행 |
+| Edge Case 입력에 대해 명세서 기술대로 처리되는가 | `tests/test_e2e/test_edge_cases.py` 실행 |
+| 명세서에 정의된 모든 기능이 빠짐없이 구현되었는가 | 명세서 전체 섹션과 코드 대조 확인 |
+| `streamlit run app.py`로 브라우저에서 실행 가능한가 | 앱 실행 후 입력→실행→결과 확인 |
+| Streamlit UI가 기존 src/ 코드를 수정하지 않았는가 | app.py만 추가, src/ 변경 없음 확인 |
 
 ---
 

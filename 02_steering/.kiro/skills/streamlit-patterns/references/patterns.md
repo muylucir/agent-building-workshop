@@ -264,3 +264,148 @@ with st.sidebar:
     count = st.number_input("수량", min_value=1, value=10)
     input_data = {"name": name, "category": category, "count": count}
 ```
+
+---
+
+## 6. Agent Observability (에이전트 동작 가시화)
+
+Strands SDK의 HookProvider를 사용하여 에이전트 내부 이벤트를 Streamlit UI에 실시간으로 표시한다.
+
+### StreamlitHook 클래스
+
+```python
+import time
+import streamlit as st
+from strands.hooks import (
+    HookProvider, HookRegistry,
+    BeforeInvocationEvent, AfterInvocationEvent,
+    BeforeToolCallEvent, AfterToolCallEvent,
+)
+
+class StreamlitHook(HookProvider):
+    """Strands Agent 이벤트를 Streamlit UI에 실시간 표시하는 Hook."""
+
+    def __init__(self):
+        self.tool_start_times: dict[str, float] = {}
+        # session_state에 로그 리스트 초기화
+        if "agent_logs" not in st.session_state:
+            st.session_state.agent_logs = []
+
+    def register_hooks(self, registry: HookRegistry) -> None:
+        registry.add_callback(BeforeInvocationEvent, self.on_agent_start)
+        registry.add_callback(AfterInvocationEvent, self.on_agent_end)
+        registry.add_callback(BeforeToolCallEvent, self.on_tool_start)
+        registry.add_callback(AfterToolCallEvent, self.on_tool_end)
+
+    def on_agent_start(self, event: BeforeInvocationEvent):
+        st.session_state.agent_logs.append({
+            "type": "agent_start",
+            "agent": getattr(event.agent, "name", "Agent"),
+            "timestamp": time.time(),
+        })
+
+    def on_agent_end(self, event: AfterInvocationEvent):
+        st.session_state.agent_logs.append({
+            "type": "agent_end",
+            "agent": getattr(event.agent, "name", "Agent"),
+            "timestamp": time.time(),
+        })
+
+    def on_tool_start(self, event: BeforeToolCallEvent):
+        tool_name = event.tool_use["name"]
+        tool_input = event.tool_use.get("input", {})
+        self.tool_start_times[tool_name] = time.time()
+        st.session_state.agent_logs.append({
+            "type": "tool_start",
+            "tool": tool_name,
+            "input": tool_input,
+            "timestamp": time.time(),
+        })
+
+    def on_tool_end(self, event: AfterToolCallEvent):
+        tool_name = event.tool_use["name"]
+        tool_output = event.tool_result
+        elapsed = time.time() - self.tool_start_times.pop(tool_name, time.time())
+        st.session_state.agent_logs.append({
+            "type": "tool_end",
+            "tool": tool_name,
+            "output": tool_output,
+            "elapsed_ms": round(elapsed * 1000),
+            "timestamp": time.time(),
+        })
+```
+
+### Hook을 에이전트에 주입
+
+기존 에이전트 코드를 수정하지 않고, app.py에서 에이전트 생성 후 hook을 추가한다.
+
+```python
+from src.agents.orchestrator import OrchestratorAgent
+
+hook = StreamlitHook()
+
+# 방법 1: 에이전트 클래스가 Agent 인스턴스를 속성으로 노출하는 경우
+agent = OrchestratorAgent()
+agent.agent.hooks.add_hook_provider(hook)
+
+# 방법 2: Agent를 직접 생성하는 경우
+from strands import Agent
+agent = Agent(system_prompt=PROMPT, model=model, tools=tools, hooks=[hook])
+```
+
+### 로그를 UI에 렌더링
+
+```python
+def render_agent_logs():
+    """session_state에 쌓인 로그를 Streamlit UI로 렌더링"""
+    for log in st.session_state.get("agent_logs", []):
+        if log["type"] == "agent_start":
+            st.info(f"🤖 **{log['agent']}** 시작")
+        elif log["type"] == "agent_end":
+            st.success(f"✅ **{log['agent']}** 완료")
+        elif log["type"] == "tool_start":
+            with st.expander(f"🔧 도구: {log['tool']}", expanded=False):
+                st.caption("입력")
+                st.json(log["input"])
+                # tool_end 로그 찾아서 출력 표시
+                matching_end = next(
+                    (l for l in st.session_state.agent_logs
+                     if l["type"] == "tool_end" and l["tool"] == log["tool"]
+                     and l["timestamp"] > log["timestamp"]),
+                    None
+                )
+                if matching_end:
+                    st.caption("출력")
+                    st.json(matching_end["output"])
+                    st.caption(f"⏱️ {matching_end['elapsed_ms']}ms")
+```
+
+### 전체 app.py 통합 예시
+
+```python
+if run_btn:
+    st.session_state.is_running = True
+    st.session_state.agent_logs = []  # 로그 초기화
+    hook = StreamlitHook()
+
+    try:
+        with st.status("🔄 파이프라인 실행 중...", expanded=True) as status:
+            agent = OrchestratorAgent()
+            agent.agent.hooks.add_hook_provider(hook)
+            result = agent.run(input_data)
+            st.session_state.pipeline_result = result
+            status.update(label="✅ 완료", state="complete")
+    except Exception as e:
+        st.error(f"❌ 오류: {e}")
+    finally:
+        st.session_state.is_running = False
+
+    # 에이전트 동작 로그 표시
+    st.subheader("📋 에이전트 동작 로그")
+    render_agent_logs()
+
+    # 최종 결과
+    if st.session_state.pipeline_result:
+        st.subheader("📊 최종 결과")
+        st.json(st.session_state.pipeline_result)
+```
