@@ -1,432 +1,359 @@
-# 멀티 에이전트 패턴 가이드
+# Multi-Agent Patterns (Python)
+
+Python SDK의 5가지 멀티 에이전트 패턴: **Agents as Tools**, **Swarm**, **Graph**, **Workflow**, **A2A**. 모두 단일 `Agent`를 빌딩 블록으로 사용한다.
 
 ## 목차
-- [패턴 개요](#패턴-개요)
-- [Graph 패턴](#graph-패턴)
-- [Swarm 패턴](#swarm-패턴)
-- [Workflow 패턴](#workflow-패턴)
-- [Agents as Tools](#agents-as-tools)
-- [공유 상태](#공유-상태)
-- [패턴 선택 가이드](#패턴-선택-가이드)
 
-## 패턴 개요
+1. 패턴 비교
+2. Agents as Tools
+3. Swarm
+4. GraphBuilder
+5. Workflow (strands_tools)
+6. A2A 프로토콜
 
-멀티 에이전트 시스템은 복잡한 문제를 해결하기 위해 여러 에이전트가 협력하는 구조다.
+## 1. 패턴 비교
 
-### 핵심 원칙
-- **오케스트레이션**: 에이전트 간 정보와 작업 흐름 관리
-- **전문화**: 각 에이전트가 특정 역할과 도구를 담당
-- **협력**: 에이전트 간 정보 공유와 협업
+| 측면 | Agents as Tools | Graph | Swarm | Workflow | A2A |
+|-----|---------------|-------|-------|---------|-----|
+| 접근 | 오케스트레이터가 specialist 에이전트를 도구로 호출 | 개발자 정의 DAG + 조건부 분기 | 에이전트 자율 핸드오프 | 사전 정의 DAG (작업 의존성) | 네트워크 경유 원격 에이전트 |
+| 실행 | LLM 라우팅 | 결정적 + LLM 분기 | 자율/순차 | 병렬 가능, 결정적 | RPC |
+| 사이클 | - | O | O | X | - |
+| 상태 공유 | invocation_state | GraphState | Shared context | Task outputs | AgentCard 메타만 |
+| 사용 시점 | 간단한 역할 분담 | 제어된 흐름 + 조건 | 자율 협업 | 반복 가능 파이프라인 | 분산 서비스 |
 
-### 패턴 비교
+## 2. Agents as Tools
 
-| 특성 | Graph | Swarm | Workflow |
-|-----|-------|-------|----------|
-| 실행 흐름 | 개발자 정의 노드/엣지 | 에이전트 자율 핸드오프 | 고정된 DAG |
-| 경로 결정 | LLM이 각 노드에서 결정 | 에이전트가 자율적으로 결정 | 의존성 그래프로 고정 |
-| 사이클 허용 | O | O | X |
-| 병렬 실행 | 배치 단위 | 순차적 | 독립 작업 병렬 |
-| 사용 사례 | 조건 분기 워크플로우 | 탐색적 협업 | 반복 작업 자동화 |
+Specialist 에이전트를 오케스트레이터의 도구로 감싼다.
 
-## Graph 패턴
-
-조건부 로직과 분기가 필요한 구조화된 프로세스에 적합.
-
-### 기본 구조
+### 방법 A: 직접 전달
 
 ```python
 from strands import Agent
-from strands.multiagent import Graph, GraphBuilder
+from strands_tools import retrieve, http_request
 
-# 전문 에이전트 생성
-classifier = Agent(
-    name="classifier",
-    system_prompt="Classify user intent: billing, technical, or general"
+research_agent = Agent(
+    system_prompt="""You are a specialized research assistant. Focus only on providing
+factual, well-sourced information. Always cite sources when possible.""",
+    tools=[retrieve, http_request],
 )
 
-billing_agent = Agent(
-    name="billing",
-    system_prompt="Handle billing inquiries"
+orchestrator = Agent(
+    system_prompt="""You are an assistant that routes queries to specialized agents:
+- For research questions → research_agent
+- For simple questions → answer directly""",
+    tools=[research_agent],
 )
-
-technical_agent = Agent(
-    name="technical",
-    system_prompt="Handle technical support"
-)
-
-general_agent = Agent(
-    name="general",
-    system_prompt="Handle general questions"
-)
-
-# 그래프 빌드
-builder = GraphBuilder()
-builder.add_node("classify", classifier)
-builder.add_node("billing", billing_agent)
-builder.add_node("technical", technical_agent)
-builder.add_node("general", general_agent)
-
-# 조건부 엣지 설정
-builder.add_conditional_edge(
-    "classify",
-    {
-        "billing": "billing",
-        "technical": "technical",
-        "general": "general"
-    }
-)
-
-# 그래프 생성
-graph = builder.build(entry_point="classify")
-
-# 실행
-result = graph("I need help with my invoice")
 ```
 
-### 조건부 라우팅
+### 방법 B: `@tool`로 래핑 (전/후처리 가능)
 
 ```python
-def route_by_intent(state: dict) -> str:
-    """에이전트 출력 기반 라우팅 함수"""
-    output = state.get("last_output", "")
-    if "billing" in output.lower():
-        return "billing"
-    elif "technical" in output.lower():
-        return "technical"
-    return "general"
+from strands import Agent, tool
+from strands_tools import retrieve, http_request
 
-builder.add_conditional_edge("classify", route_by_intent)
+RESEARCH_ASSISTANT_PROMPT = "You are a research specialist..."
+
+
+@tool
+def research_assistant(query: str) -> str:
+    """Process and respond to research-related queries.
+
+    Args:
+        query: A research question requiring factual information
+
+    Returns:
+        A detailed research answer with citations
+    """
+    try:
+        research = Agent(
+            system_prompt=RESEARCH_ASSISTANT_PROMPT,
+            tools=[retrieve, http_request],
+        )
+        return str(research(query))
+    except Exception as e:
+        return f"Error in research assistant: {e}"
+
+
+orchestrator = Agent(tools=[research_assistant])
 ```
 
-### 사이클 (반복)
+## 3. Swarm
 
-```python
-# 검증 후 재작업 사이클
-builder.add_node("writer", writer_agent)
-builder.add_node("reviewer", reviewer_agent)
-
-builder.add_edge("writer", "reviewer")
-builder.add_conditional_edge(
-    "reviewer",
-    {
-        "approved": "end",
-        "needs_revision": "writer"  # 사이클
-    }
-)
-```
-
-### 스트리밍
-
-```python
-async for event in graph.stream_async("Process this request"):
-    if event.get("type") == "multiagent_node_start":
-        print(f"Starting node: {event['node_id']}")
-    elif event.get("type") == "multiagent_node_stop":
-        print(f"Completed node: {event['node_id']}")
-    elif "data" in event:
-        print(event["data"], end="")
-```
-
-## Swarm 패턴
-
-자율적으로 작업을 핸드오프하는 협업 에이전트 팀.
-
-### 기본 구조
+자율 협업 에이전트 팀. 공유 컨텍스트 + 자동 `handoff_to_agent` 도구.
 
 ```python
 from strands import Agent
 from strands.multiagent import Swarm
-from strands.tools.swarm import handoff_to_agent
 
-# 전문 에이전트 정의
-researcher = Agent(
-    name="researcher",
-    system_prompt="Research information. Hand off to architect when done.",
-    tools=[handoff_to_agent]
-)
+researcher = Agent(name="researcher", system_prompt="You are a research specialist...")
+coder = Agent(name="coder", system_prompt="You are a coding specialist...")
+reviewer = Agent(name="reviewer", system_prompt="You are a code review specialist...")
+architect = Agent(name="architect", system_prompt="You are a system architecture specialist...")
 
-architect = Agent(
-    name="architect",
-    system_prompt="Design solutions. Hand off to coder for implementation.",
-    tools=[handoff_to_agent]
-)
-
-coder = Agent(
-    name="coder",
-    system_prompt="Implement solutions. Hand off to reviewer when done.",
-    tools=[handoff_to_agent]
-)
-
-reviewer = Agent(
-    name="reviewer",
-    system_prompt="Review code and provide feedback.",
-    tools=[handoff_to_agent]
-)
-
-# Swarm 생성
 swarm = Swarm(
-    agents=[researcher, architect, coder, reviewer],
-    initial_agent="researcher"
+    [coder, researcher, reviewer, architect],
+    entry_point=researcher,
+    max_handoffs=20,
+    max_iterations=20,
+    execution_timeout=900.0,
+    node_timeout=300.0,
+    repetitive_handoff_detection_window=8,
+    repetitive_handoff_min_unique_agents=3,
 )
 
-# 실행
-result = swarm("Build a REST API for user management")
+result = swarm("Design and implement a simple REST API for a todo app")
 ```
 
-### 핸드오프 도구
-
-`handoff_to_agent`는 에이전트가 다른 에이전트에게 제어를 넘기는 도구다:
+Python Swarm은 각 노드에 `handoff_to_agent` 도구를 자동 주입한다. 수동 등록 불필요.
 
 ```python
-from strands.tools.swarm import handoff_to_agent
-
-# 에이전트는 자연스럽게 핸드오프를 결정
-# "I've completed my research. Handing off to architect..."
-```
-
-### 에이전트 풀 구성
-
-```python
-# 다양한 전문가로 구성된 팀
-incident_team = Swarm(
-    agents=[
-        Agent(name="monitor", system_prompt="Monitor and detect issues"),
-        Agent(name="network_specialist", system_prompt="Diagnose network issues"),
-        Agent(name="database_admin", system_prompt="Handle database problems"),
-        Agent(name="escalation", system_prompt="Escalate to human if needed")
-    ],
-    initial_agent="monitor"
+# 에이전트 내부에서 LLM이 내리는 호출 (개발자가 직접 부르지 않음)
+handoff_to_agent(
+    agent_name="coder",
+    message="I need help implementing this algorithm in Python",
+    context={"algorithm_details": "..."},
 )
 ```
 
-### 스트리밍
+### 루프 방지
 
-```python
-async for event in swarm.stream_async("Analyze the incident"):
-    if event.get("type") == "multiagent_handoff":
-        print(f"Handoff: {event['from_node_ids']} -> {event['to_node_ids']}")
-```
+- `max_handoffs`: 총 핸드오프 횟수 제한
+- `max_iterations`: 총 이터레이션 제한
+- `execution_timeout`: 전체 타임아웃
+- `node_timeout`: 에이전트별 타임아웃
+- `repetitive_handoff_detection_window` + `repetitive_handoff_min_unique_agents`: ping-pong 패턴 감지
 
-## Workflow 패턴
-
-고정된 작업 그래프(DAG)를 단일 도구로 캡슐화.
-
-### 기본 구조
+### 멀티모달 Swarm
 
 ```python
 from strands import Agent
-from strands.tools.workflow import workflow_tool
+from strands.multiagent import Swarm
+from strands.types.content import ContentBlock
 
-# Workflow 정의
-@workflow_tool
-def data_pipeline(input_data: str):
-    """데이터 처리 파이프라인"""
+image_analyzer = Agent(name="image_analyzer", system_prompt="You are an image analysis expert...")
+report_writer = Agent(name="report_writer", system_prompt="You are a report writing expert...")
 
-    # 작업 정의
-    tasks = {
-        "extract": {
-            "agent": Agent(system_prompt="Extract data"),
-            "dependencies": []
-        },
-        "transform": {
-            "agent": Agent(system_prompt="Transform data"),
-            "dependencies": ["extract"]
-        },
-        "validate": {
-            "agent": Agent(system_prompt="Validate data"),
-            "dependencies": ["extract"]  # transform과 병렬 실행 가능
-        },
-        "load": {
-            "agent": Agent(system_prompt="Load data"),
-            "dependencies": ["transform", "validate"]
-        }
-    }
+swarm = Swarm([image_analyzer, report_writer])
 
-    return tasks
+with open("diagram.png", "rb") as fp:
+    image_bytes = fp.read()
 
-# Workflow를 도구로 사용
-orchestrator = Agent(
-    system_prompt="Orchestrate data processing",
-    tools=[data_pipeline]
-)
+content_blocks = [
+    ContentBlock(text="Analyze this image and create a report:"),
+    ContentBlock(image={"format": "png", "source": {"bytes": image_bytes}}),
+]
 
-result = orchestrator("Process the sales data")
+result = swarm(content_blocks)
 ```
 
-### 특징
-- **결정론적**: 의존성 그래프로 실행 순서 고정
-- **병렬 실행**: 독립 작업은 병렬 실행
-- **단일 도구**: 복잡한 프로세스를 하나의 도구로 캡슐화
-- **사이클 불가**: DAG 구조로 사이클 없음
+## 4. GraphBuilder
 
-## Agents as Tools
+결정적 DAG + 조건부 엣지. 사이클 허용.
 
-에이전트를 다른 에이전트의 도구로 사용.
-
-### 기본 패턴
+### 기본 Graph
 
 ```python
-from strands import Agent, tool
+import logging
+from strands import Agent
+from strands.multiagent import GraphBuilder
 
-# 전문 에이전트
-math_agent = Agent(
-    name="Math Expert",
-    system_prompt="You are a math expert. Solve problems step by step."
+logging.getLogger("strands.multiagent").setLevel(logging.DEBUG)
+logging.basicConfig(
+    format="%(levelname)s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler()],
 )
 
-writing_agent = Agent(
-    name="Writer",
-    system_prompt="You are a skilled writer. Create clear content."
-)
+researcher = Agent(name="researcher", system_prompt="You are a research specialist...")
+analyst = Agent(name="analyst", system_prompt="You are a data analysis specialist...")
+fact_checker = Agent(name="fact_checker", system_prompt="You are a fact checking specialist...")
+report_writer = Agent(name="report_writer", system_prompt="You are a report writing specialist...")
 
-# 에이전트를 도구로 래핑
-@tool
-def ask_math_expert(question: str) -> str:
-    """Ask the math expert to solve a problem.
+builder = GraphBuilder()
+builder.add_node(researcher, "research")
+builder.add_node(analyst, "analysis")
+builder.add_node(fact_checker, "fact_check")
+builder.add_node(report_writer, "report")
 
-    Args:
-        question: The math question to solve
-    """
-    result = math_agent(question)
-    return str(result)
+builder.add_edge("research", "analysis")
+builder.add_edge("research", "fact_check")
+builder.add_edge("analysis", "report")
+builder.add_edge("fact_check", "report")
 
-@tool
-def ask_writer(topic: str) -> str:
-    """Ask the writer to create content.
+builder.set_entry_point("research")
+builder.set_execution_timeout(600)
 
-    Args:
-        topic: The topic to write about
-    """
-    result = writing_agent(topic)
-    return str(result)
+graph = builder.build()
 
-# 오케스트레이터
-orchestrator = Agent(
-    system_prompt="Route tasks to appropriate specialists",
-    tools=[ask_math_expert, ask_writer]
-)
+result = graph("Research the impact of AI on healthcare and create a comprehensive report")
 
-result = orchestrator("Calculate 15% of 240 and write a summary")
+print(f"Status: {result.status}")
+print(f"Execution order: {[node.node_id for node in result.execution_order]}")
+print(f"Analysis: {result.results['analysis'].result}")
+print(f"Total nodes: {result.total_nodes}")
+print(f"Completed: {result.completed_nodes}")
+print(f"Failed: {result.failed_nodes}")
+print(f"Execution time: {result.execution_time}ms")
+print(f"Token usage: {result.accumulated_usage}")
 ```
 
-### 스트리밍 서브 에이전트
+### 조건부 엣지 (OR 기본)
 
 ```python
-from typing import AsyncIterator
-from dataclasses import dataclass
-from strands import Agent, tool
+def only_if_research_successful(state) -> bool:
+    research_node = state.results.get("research")
+    if not research_node:
+        return False
+    return "successful" in str(research_node.result).lower()
 
-@dataclass
-class SubAgentResult:
-    agent: Agent
-    event: dict
 
-@tool
-async def math_agent_stream(query: str) -> AsyncIterator:
-    """Solve math problems with streaming."""
-    agent = Agent(
-        name="Math Expert",
-        system_prompt="Solve math problems",
-        callback_handler=None
-    )
-
-    async for event in agent.stream_async(query):
-        yield SubAgentResult(agent=agent, event=event)
-        if "result" in event:
-            yield str(event["result"])
+builder.add_edge("research", "analysis", condition=only_if_research_successful)
 ```
 
-## 공유 상태
+### AND 시맨틱스 (모든 의존성 완료 대기)
 
-`invocation_state`로 모든 에이전트에 상태 전달.
-
-### Graph/Swarm에서 공유 상태
+Python 기본은 OR. AND가 필요하면 factory 함수:
 
 ```python
-shared_state = {
-    "user_id": "user123",
-    "session_id": "sess456",
-    "debug_mode": True,
-    "database_connection": db_conn
-}
+from strands.multiagent.graph import GraphState
+from strands.multiagent.base import Status
 
-# Graph 실행
-result = graph("Analyze data", invocation_state=shared_state)
 
-# Swarm 실행
-result = swarm("Process request", invocation_state=shared_state)
+def all_dependencies_complete(required_nodes: list[str]):
+    def check_all_complete(state: GraphState) -> bool:
+        return all(
+            node_id in state.results and state.results[node_id].status == Status.COMPLETED
+            for node_id in required_nodes
+        )
+    return check_all_complete
+
+
+# Z는 A, B, C 모두 완료된 후에만 실행
+builder.add_edge("A", "Z", condition=all_dependencies_complete(["A", "B", "C"]))
+builder.add_edge("B", "Z", condition=all_dependencies_complete(["A", "B", "C"]))
+builder.add_edge("C", "Z", condition=all_dependencies_complete(["A", "B", "C"]))
 ```
 
-### 도구에서 상태 접근
+### Graph 추가 설정
+
+- `set_max_node_executions(n)`: 순환 그래프 안전장치
+- `set_node_timeout(s)`: 노드별 타임아웃
+- `reset_on_revisit(True)`: 재방문 시 state 초기화
+
+### 공유 invocation_state (모델 프롬프트에 노출 안 됨)
+
+```python
+shared_state = {"user_id": "user123", "session_id": "sess456", "debug_mode": True}
+result = graph("Analyze customer data", invocation_state=shared_state)
+```
+
+도구가 이를 읽을 때:
 
 ```python
 from strands import tool, ToolContext
 
+
 @tool(context=True)
 def query_data(query: str, tool_context: ToolContext) -> str:
-    """Query with user context."""
     user_id = tool_context.invocation_state.get("user_id")
-    db = tool_context.invocation_state.get("database_connection")
-
-    # 사용자별 쿼리 실행
-    return db.execute(query, user_id=user_id)
+    return f"..."
 ```
 
-### 상태 구분
+## 5. Workflow (strands_tools)
 
-| 용도 | 방법 | LLM에 노출 |
-|-----|-----|----------|
-| 설정/컨텍스트 | `invocation_state` | X |
-| LLM 추론 데이터 | 도구 파라미터 | O |
-| 요청 간 지속 | 클래스 기반 도구 | X |
+작업 의존성 기반 병렬 실행을 반복 가능 파이프라인으로 캡슐화한다. `workflow` 도구는 `strands-agents-tools` 제공.
+
+```python
+from strands import Agent
+from strands_tools import workflow
+
+agent = Agent(tools=[workflow])
+
+agent.tool.workflow(
+    action="create",
+    workflow_id="data_analysis",
+    tasks=[
+        {
+            "task_id": "data_extraction",
+            "description": "Extract key financial data from the quarterly report",
+            "system_prompt": "You extract and structure financial data from reports.",
+            "priority": 5,
+        },
+        {
+            "task_id": "trend_analysis",
+            "description": "Analyze trends in the data compared to previous quarters",
+            "dependencies": ["data_extraction"],
+            "system_prompt": "You identify trends in financial time series.",
+            "priority": 3,
+        },
+    ],
+)
+
+agent.tool.workflow(action="start", workflow_id="data_analysis")
+status = agent.tool.workflow(action="status", workflow_id="data_analysis")
+print(status)
+```
+
+`dependencies`가 지정된 작업은 선행 작업이 완료된 뒤 실행되고, 나머지는 병렬 처리된다. 사이클은 허용되지 않는다.
+
+## 6. A2A (Agent-to-Agent)
+
+네트워크 경유로 원격 Strands 에이전트를 노출/소비.
+
+### 서버 (에이전트 노출)
+
+```python
+from strands import Agent
+from strands.multiagent.a2a import A2AServer
+from strands_tools import calculator
+
+strands_agent = Agent(
+    name="Calculator Agent",
+    description="A calculator agent that can perform basic arithmetic operations.",
+    tools=[calculator],
+    callback_handler=None,
+)
+
+a2a_server = A2AServer(agent=strands_agent)
+a2a_server.serve()  # HTTP 서버 시작, /.well-known/agent-card.json에 AgentCard 노출
+```
+
+### 클라이언트 (원격 에이전트 소비)
+
+```python
+import asyncio
+import logging
+from strands import Agent
+from strands_tools.a2a_client import A2AClientToolProvider
+
+logging.basicConfig(level=logging.INFO)
+
+provider = A2AClientToolProvider(known_agent_urls=["http://127.0.0.1:9000"])
+agent = Agent(tools=provider.tools)
+response = agent("pick an agent and make a sample call")
+```
+
+### AgentCard 직접 조회
+
+```python
+async def main() -> None:
+    from strands.multiagent.a2a import A2AAgent  # A2AAgent 래퍼 (공식 API)
+
+    a2a_agent = A2AAgent(endpoint="http://localhost:9000")
+    card = await a2a_agent.get_agent_card()
+    print(f"Agent: {card.name}")
+
+
+asyncio.run(main())
+```
+
+`A2AAgent`는 A2A 프로토콜 핸드셰이크를 캡슐화하며, `/.well-known/agent-card.json`에서 lazy fetch한다.
 
 ## 패턴 선택 가이드
 
-### Graph 사용 시기
-- 조건부 분기가 필요한 비즈니스 프로세스
-- 에러 처리 경로가 명확히 정의된 경우
-- 인터랙티브 사용자 흐름
-
-**예시**: 고객 지원 라우팅, 데이터 검증 파이프라인
-
-### Swarm 사용 시기
-- 다양한 전문성이 필요한 탐색적 작업
-- 경로가 사전에 결정되지 않는 경우
-- 자율적 협업이 필요한 경우
-
-**예시**: 인시던트 대응, 소프트웨어 개발 팀
-
-### Workflow 사용 시기
-- 반복 가능한 고정 프로세스
-- 독립 작업의 병렬 실행이 필요한 경우
-- 에이전트의 단일 도구로 캡슐화하고 싶은 경우
-
-**예시**: ETL 파이프라인, 온보딩 프로세스
-
-### Agents as Tools 사용 시기
-- 간단한 위임 패턴
-- 기존 에이전트 재사용
-- 계층적 에이전트 구조
-
-**예시**: 전문가 라우팅, 작업 위임
-
-## 에러 처리
-
-### Graph
-```python
-builder.add_node("error_handler", error_agent)
-builder.add_conditional_edge(
-    "processing",
-    {"success": "next_step", "error": "error_handler"}
-)
-```
-
-### Swarm
-에이전트가 에러 처리 전문가에게 핸드오프:
-```python
-# 에이전트가 자율적으로 판단
-# "I encountered an issue. Handing off to error_handler..."
-```
-
-### Workflow
-하나의 작업 실패 시 의존 작업 모두 중단.
+| 시나리오 | 추천 패턴 |
+|---------|---------|
+| "조사 → 작성 → 리뷰" 단순 전문화 | Agents as Tools |
+| 조건부 분기 + 에러 라우팅 | Graph |
+| 에이전트가 스스로 협업 판단 | Swarm |
+| 매번 같은 절차 재실행 | Workflow |
+| 다른 팀/언어/인프라의 에이전트 호출 | A2A |
